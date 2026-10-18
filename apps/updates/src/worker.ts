@@ -1,4 +1,3 @@
-import { instantiate } from "@open-ota/bsdiff";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as SQL from "alchemy/SQL/D1";
 import { Config, ConfigProvider, Effect, Layer, Option, Redacted } from "effect";
@@ -13,7 +12,7 @@ import { Delivery } from "./delivery.ts";
 import { Retention, sweep } from "./gc.ts";
 import { Metrics, MetricsDataset } from "./metrics.ts";
 import { noStoreByDefault } from "./http.ts";
-import { PatchEngine, PatchPolicy } from "./patching.ts";
+import { PatchPolicy } from "./patching.ts";
 import { PublishAuth, routes } from "./routes.ts";
 import { Signer } from "./signing.ts";
 import { UpdateStore } from "./store.ts";
@@ -70,15 +69,7 @@ export default class Updates extends Cloudflare.Worker<Updates>()(
       }))),
     );
 
-    // Patches: what the server accepts, and the engine that proves each one.
-    // Deploying evaluates this module in Node to read the Worker's bindings,
-    // where the `.wasm` module does not exist; it is only loaded inside the
-    // bundle workerd runs, where the bundler ships it as a CompiledWasm module.
-    const bsdiff = yield* Effect.promise(async () => {
-      if (!(globalThis as { __ALCHEMY_RUNTIME__?: boolean }).__ALCHEMY_RUNTIME__) return undefined;
-      const { default: module } = await import("@open-ota/bsdiff/bsdiff.wasm");
-      return instantiate(module);
-    });
+    // Patches: what the server accepts.
     const policy = {
       maxRatio: yield* Config.number("OTA_PATCH_MAX_RATIO").pipe(Config.withDefault(PatchPolicy.defaults.maxRatio)),
       maxBundleBytes:
@@ -117,7 +108,6 @@ export default class Updates extends Cloudflare.Worker<Updates>()(
       Metrics.analyticsEngine(dataset),
       Layer.succeed(Signer, signer),
       Layer.succeed(PublishAuth, { token: Redacted.value(publishToken) }),
-      bsdiff === undefined ? PatchEngine.unavailable : PatchEngine.fromBsdiff(bsdiff),
       Layer.succeed(PatchPolicy, policy),
       Layer.succeed(Retention, retention),
       // No binding, no setup: an isolate-local memo in front of the colo's

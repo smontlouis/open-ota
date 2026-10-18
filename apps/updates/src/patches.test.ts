@@ -214,21 +214,24 @@ describe.each(stores)("delta patches over the %s store", (_, store) => {
     expect((await authed(`/publish/patches/not-a-hash/${targetHash}`, { method: "PUT", body: patchBody })).status).toBe(400);
   });
 
-  it("rejects a patch that is not BSDIFF40 or does not rebuild the target", async () => {
-    const truncated = await authed(`/publish/patches/${baseHash}/${targetHash}`, {
-      method: "PUT",
-      body: patchBody.subarray(0, 100),
-    });
-    expect(truncated.status).toBe(400);
-    expect(((await truncated.json()) as { error: string }).error).toContain("could not be applied");
+  it("rejects a patch whose header is not BSDIFF40 for a file of the target's size", async () => {
+    const refusal = async (body: Uint8Array<ArrayBuffer>) => {
+      const response = await authed(`/publish/patches/${baseHash}/${targetHash}`, { method: "PUT", body });
+      expect(response.status).toBe(400);
+      return ((await response.json()) as { error: string }).error;
+    };
+    expect(await refusal(targetBundle.subarray(0, 64))).toContain("not a BSDIFF40 patch");
+    expect(await refusal(patchBody.subarray(0, 100))).toContain("truncated");
 
-    // A valid patch, but from base to itself: it rebuilds the base, not the target.
-    const identity = bsdiff.diff(baseBundle, baseBundle);
-    const wrong = await authed(`/publish/patches/${baseHash}/${targetHash}`, { method: "PUT", body: identity });
-    expect(wrong.status).toBe(400);
-    expect(((await wrong.json()) as { error: string }).error).toContain("does not rebuild the target");
+    // The diff block's bzip2 magic, damaged.
+    const damaged = Uint8Array.from(patchBody);
+    damaged[32 + 71] = 0;
+    expect(await refusal(damaged)).toContain("not bzip2 streams");
 
-    // Neither attempt disturbed the verified patch already stored.
+    // A valid patch, but from base to itself: it announces the base's size, not the target's.
+    expect(await refusal(bsdiff.diff(baseBundle, baseBundle))).toContain(`rebuilds ${baseBundle.length} bytes`);
+
+    // None of them disturbed the patch already stored.
     const still = await request(`/assets/${targetHash}`, {
       headers: { "a-im": "bsdiff", "expo-current-update-id": baseUpdateId },
     });
@@ -413,7 +416,7 @@ describe("patch policy with a bundle size cap", () => {
   const server = makeServer(stores[0][1], AssetStore.memory(), { policy: { maxBundleBytes: 500, maxRatio: 1 } });
   afterAll(() => server.dispose());
 
-  it("gives no patches to bundles the Worker could not verify in memory", async () => {
+  it("gives no patches to bundles above the size cap", async () => {
     const [baseHash, targetHash] = await Promise.all([hashOf(baseBundle), hashOf(targetBundle)]);
     for (const [hash, bytes] of [[baseHash, baseBundle], [targetHash, targetBundle]] as const) {
       await server.authed(`/publish/assets/${hash}`, { method: "PUT", headers: { "content-type": "application/javascript" }, body: bytes });

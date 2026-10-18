@@ -5,11 +5,11 @@ import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effe
 import { AssetStore } from "./assets.ts";
 import { base64UrlToHex, sha256Base64Url } from "./crypto.ts";
 import { CheckDebounce } from "./debounce.ts";
-import { BadRequest, NotFound, StorageError } from "./errors.ts";
+import { BadRequest, NotFound, PatchError } from "./errors.ts";
 import { bearer, badRequestOn, handle } from "./http.ts";
 import { Metrics } from "./metrics.ts";
 import { AssetHash, BranchName, BuildInput, Distribution, Platform, PublishGroupInput } from "./model.ts";
-import { PatchEngine, PatchPolicy, gzipSize, patchDecision } from "./patching.ts";
+import { PatchPolicy, gzipSize, patchDecision, patchProblem } from "./patching.ts";
 import {
   ManifestHeaders,
   decide,
@@ -73,7 +73,6 @@ export const routes = HttpRouter.use(
     const metrics = yield* Metrics;
     const signer = yield* Signer;
     const auth = yield* PublishAuth;
-    const engine = yield* PatchEngine;
     const policy = yield* PatchPolicy;
     const debounce = yield* CheckDebounce;
 
@@ -397,16 +396,10 @@ export const routes = HttpRouter.use(
               maxRatio: policy.maxRatio,
             });
           }
-          // The trust boundary: the patch is applied here, with the same
-          // algorithm the device runs, and must rebuild the target exactly.
-          const baseBytes = yield* assets.getBytes(`assets/${base}`);
-          if (baseBytes === null) {
-            return yield* Effect.fail(new StorageError({ message: "The base bundle is missing from storage." }));
-          }
-          const rebuilt = yield* engine.apply(baseBytes, bytes);
-          if ((yield* sha256Base64Url(rebuilt as Uint8Array<ArrayBuffer>)) !== target) {
-            return yield* Effect.fail(new BadRequest({ message: "The patch does not rebuild the target bundle." }));
-          }
+          // The header only: the CLI rebuilt the target from this patch before
+          // uploading it, and the device checks what it rebuilds (see patchProblem).
+          const problem = patchProblem(bytes, targetInfo.size);
+          if (problem !== undefined) return yield* Effect.fail(new PatchError(problem));
           yield* assets.put(`patches/${base}/${target}`, { bytes }, { contentType: "application/octet-stream" });
           yield* store.insertPatch({ baseHash: base, targetHash: target, size: bytes.length });
           return json({

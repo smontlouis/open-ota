@@ -111,7 +111,8 @@ export const generatePatches = Effect.fn("patches.generate")(function* (options:
               });
               return;
             }
-            // Proven here before upload; the server proves it again before storing.
+            // Proven here before upload. The server only reads the header, and the
+            // device checks the rebuilt bundle's hash.
             if (!same(yield* differ.patch(baseBytes, patch), target.bytes)) {
               return yield* new CliFailure({ message: "the patch does not rebuild the target bundle" });
             }

@@ -1,40 +1,56 @@
-import { BsdiffError, type Bsdiff } from "@open-ota/bsdiff";
-import { Context, Effect, Layer } from "effect";
-import { PatchError, StorageError } from "./errors.ts";
+import { Context, Effect } from "effect";
+import { StorageError } from "./errors.ts";
 
-// Applies a bsdiff patch. The server runs every uploaded patch through it
-// before storing it, so the only patches devices ever see are ones that
-// provably rebuild the target.
-export class PatchEngine extends Context.Service<
-  PatchEngine,
-  { readonly apply: (base: Uint8Array, patch: Uint8Array) => Effect.Effect<Uint8Array, PatchError> }
->()("expo-ota/PatchEngine") {
-  // Outside the Worker runtime nothing can be verified, so nothing is accepted.
-  static readonly unavailable = Layer.succeed(PatchEngine, {
-    apply: () => Effect.fail(new PatchError({ code: "unavailable", message: "The patch engine is not loaded." })),
-  });
+// A BSDIFF40 patch is a 32-byte header (magic, control length, diff length,
+// size of the file it rebuilds) followed by three bzip2 streams.
+const magic = [..."BSDIFF40"].map((char) => char.charCodeAt(0));
+const header = 32;
 
-  static readonly fromBsdiff = (bsdiff: Bsdiff) =>
-    Layer.succeed(PatchEngine, {
-      apply: Effect.fn("PatchEngine.apply")((base: Uint8Array, patch: Uint8Array) =>
-        Effect.try({
-          try: () => bsdiff.patch(base, patch),
-          catch: (cause) =>
-            cause instanceof BsdiffError
-              ? new PatchError({ code: cause.code, message: `The patch could not be applied: ${cause.message}` })
-              : new PatchError({ code: "unknown", message: `The patch could not be applied: ${String(cause)}` }),
-        }),
-      ),
-    });
+// bsdiff writes lengths as sign-magnitude little-endian 64-bit integers.
+const offtin = (bytes: Uint8Array, at: number): number => {
+  let value = bytes[at + 7]! & 0x7f;
+  for (let index = 6; index >= 0; index--) value = value * 256 + bytes[at + index]!;
+  return bytes[at + 7]! & 0x80 ? -value : value;
+};
+
+const isBzip2 = (bytes: Uint8Array, at: number): boolean =>
+  at + 4 <= bytes.length && bytes[at] === 0x42 && bytes[at + 1] === 0x5a && bytes[at + 2] === 0x68 && bytes[at + 3]! >= 0x31 && bytes[at + 3]! <= 0x39;
+
+export interface PatchProblem {
+  readonly code: "corrupt-patch" | "size-mismatch";
+  readonly message: string;
 }
+
+// What the server can check without rebuilding the bundle. Rebuilding one holds
+// the base, the decompressed blocks and the result in memory at once, which
+// passes a Worker's 128 MB for bundles of about 20 MB. The CLI rebuilds each
+// patch before uploading it, and the device checks the rebuilt bundle's hash
+// and downloads the full bundle when it does not match.
+export const patchProblem = (patch: Uint8Array, targetSize: number): PatchProblem | undefined => {
+  if (patch.length < header || magic.some((byte, index) => patch[index] !== byte)) {
+    return { code: "corrupt-patch", message: "The patch is not a BSDIFF40 patch." };
+  }
+  const controlLength = offtin(patch, 8);
+  const diffLength = offtin(patch, 16);
+  const size = offtin(patch, 24);
+  if (controlLength < 0 || diffLength < 0 || controlLength + diffLength > patch.length - header) {
+    return { code: "corrupt-patch", message: "The patch is truncated: its header announces more than it holds." };
+  }
+  if (![header, header + controlLength, header + controlLength + diffLength].every((at) => isBzip2(patch, at))) {
+    return { code: "corrupt-patch", message: "The patch's blocks are not bzip2 streams." };
+  }
+  if (size !== targetSize) {
+    return { code: "size-mismatch", message: `The patch rebuilds ${size} bytes; the target bundle has ${targetSize}.` };
+  }
+  return undefined;
+};
 
 export interface PatchPolicyShape {
   // A patch is stored only when it is at most this share of what the full
   // bundle costs over the wire. Above it the patch is not worth a second
   // request path.
   readonly maxRatio: number;
-  // Bundles above this get no patches: verifying one holds the base, the patch
-  // and the rebuilt bundle in Worker memory at once.
+  // Bundles above this get no patches: a device rebuilds the bundle in memory.
   readonly maxBundleBytes: number;
 }
 

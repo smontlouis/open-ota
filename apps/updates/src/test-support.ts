@@ -23,7 +23,7 @@ import { Delivery } from "./delivery.ts";
 import { Retention, type RetentionPolicy } from "./gc.ts";
 import { Metrics, type MetricEvent } from "./metrics.ts";
 import { noStoreByDefault } from "./http.ts";
-import { PatchEngine, PatchPolicy, type PatchPolicyShape } from "./patching.ts";
+import { PatchPolicy, type PatchPolicyShape } from "./patching.ts";
 import { PublishAuth, routes } from "./routes.ts";
 import { Signer } from "./signing.ts";
 import { UpdateStore } from "./store.ts";
@@ -89,7 +89,6 @@ export const makeServer = (
           Metrics.memory(events),
           Signer.fromKey(keys.privateKey, "main"),
           Layer.succeed(PublishAuth, { token }),
-          PatchEngine.fromBsdiff(bsdiff),
           Layer.succeed(PatchPolicy, { ...PatchPolicy.defaults, ...options.policy }),
           Layer.succeed(Retention, retention),
           options.debounce ?? CheckDebounce.always,

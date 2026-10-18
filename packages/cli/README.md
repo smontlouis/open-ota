@@ -70,7 +70,7 @@ Requires Node 20 or newer and the Expo CLI of the app it runs in.
 `publish` asks the server for the bundles worth diffing the new one against, diffs each, checks
 that the patch rebuilds the new bundle, and uploads it. A patch is only uploaded when it is at most
 the server's configured share of the compressed bundle (30% by default); the server checks the same
-rule and rebuilds the bundle from the patch before storing it. Skipped and declined patches are
+rule and the patch's header before storing it. Skipped and declined patches are
 reported with `--verbose`; a failure is a warning and the update still publishes.
 
 `open-ota patches --branch production` computes the patches the newest bundle on the branch is

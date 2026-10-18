@@ -31,7 +31,7 @@ export class ChecksumMismatch extends Schema.TaggedError<ChecksumMismatch>()("Ch
   message: Schema.String,
 }) {}
 
-// A patch the engine refused: not BSDIFF40, truncated, or too large to apply.
+// A patch refused at upload: not BSDIFF40, truncated, or for a file of another size.
 export class PatchError extends Schema.TaggedError<PatchError>()("PatchError", {
   message: Schema.String,
   code: Schema.String,

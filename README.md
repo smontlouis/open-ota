@@ -46,7 +46,7 @@ Choose the previous update or embedded JavaScript for each build, with the affec
 - **Gradual rollouts.** Start with a percentage of devices and increase it to 100%. The server prevents overlapping rollouts for the same branch, platform, and runtime, including concurrent publishes.
 - **Rollbacks.** Return each build to its previous update or embedded JavaScript from the dashboard.
 - **Setup and diagnostics.** `open-ota init` configures your app; `open-ota doctor` checks configuration, credentials, runtimes, and server signatures. Publish runs these checks before exporting.
-- **Efficient delivery.** Content-addressed assets are deduplicated and cached at the edge. bsdiff delta patches are computed at publish time against the bundles devices actually run, including the JavaScript embedded in store builds, verified by the server before they are stored, and kept only when they beat the compressed download. Full bundles are always the fallback, and a nightly sweep removes bundles nothing references.
+- **Efficient delivery.** Content-addressed assets are deduplicated and cached at the edge. bsdiff delta patches are computed at publish time against the bundles devices actually run, including the JavaScript embedded in store builds, verified by the CLI before they are uploaded, and kept only when they beat the compressed download. Full bundles are always the fallback, and a nightly sweep removes bundles nothing references.
 - **Device health.** See reported update adoption, failed updates, runtime versions, and country breakdowns from client check-ins, without adding a separate telemetry SDK.
 - **Your infrastructure.** Workers, D1, R2, Analytics Engine, and a dashboard protected by Cloudflare Access, deployed together with Alchemy.
 
@@ -87,7 +87,7 @@ Fill in `.env`:
 | `OTA_UPDATES_DOMAIN` | Updates hostname, such as `updates.example.com`. Omit for a `workers.dev` URL. |
 | `OTA_DASHBOARD_DOMAIN` | Dashboard hostname, such as `ota.example.com`. Omit for a `workers.dev` URL. |
 | `OTA_PATCH_MAX_RATIO` | Largest patch worth storing, as a share of the compressed bundle download. Default `0.3`. |
-| `OTA_PATCH_MAX_BUNDLE_MB` | Bundles above this get no patches, since the Worker verifies each one in memory. Default `32`. |
+| `OTA_PATCH_MAX_BUNDLE_MB` | Bundles above this get no patches, since a device rebuilds the bundle in memory. Default `32`. |
 | `OTA_RETAIN_GROUPS`, `OTA_RETAIN_DAYS`, `OTA_RETAIN_DEVICE_DAYS` | What the nightly sweep keeps. Defaults `20`, `30`, `90`. See [Delta patches and retention](#delta-patches-and-retention). |
 | `OTA_DELIVERY_STATS` | Set to `off` to skip minting the analytics-only API token the dashboard's download counts use, for deploy credentials that cannot create tokens. |
 
@@ -166,7 +166,7 @@ and runtime. Promote a tested group to `production` when ready; production build
 `production` channel with a matching runtime version.
 
 Delta patches need nothing installed: the CLI ships the bsdiff engine as WebAssembly. Patches are
-computed and verified on the publishing machine, verified again by the server, and uploaded before
+computed and verified on the publishing machine, checked again by the server, and uploaded before
 the update group is published, so no device can fetch a new bundle before its patches exist.
 `--no-patches` skips them, and `open-ota patches` computes whatever a branch is missing later.
 
@@ -252,8 +252,10 @@ size at upload and stores a patch only when it is at most `OTA_PATCH_MAX_RATIO` 
 CLI applies the same rule before uploading. Bundles above `OTA_PATCH_MAX_BUNDLE_MB` get no patches.
 
 **Trust.** The CLI applies each patch it computed and checks the result before uploading. The server
-applies it again with the same engine and refuses to store anything that does not rebuild the
-target bundle byte for byte. Devices verify the manifest hash as always.
+checks only the header: a BSDIFF40 patch whose blocks are bzip2 streams, for a file of the target
+bundle's size. Rebuilding the bundle in the Worker would hold the base, the decompressed blocks and
+the result at once, past a Worker's 128 MB for bundles of about 20 MB. Devices check the rebuilt
+bundle against the manifest hash and download the full bundle when it does not match.
 
 **Registered builds and fresh installs.** `open-ota build register` records a native build by
 platform, runtime, profile, distribution and channel. CI can use `open-ota build get` to decide
